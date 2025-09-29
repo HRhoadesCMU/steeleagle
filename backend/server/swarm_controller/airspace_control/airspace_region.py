@@ -143,8 +143,8 @@ class AirspaceRegion:
             return False
 
         lat_adjacent = (
-            abs(self.max_lat - other.min_alt) <= 1e-9
-            or abs(self.min_lat - other.max_alt) < 1e-9
+            abs(self.max_lat - other.min_lat) <= 1e-9
+            or abs(self.min_lat - other.max_lat) < 1e-9
         )
         lon_adjacent = (
             abs(self.max_lon - other.min_lon) <= 1e-9
