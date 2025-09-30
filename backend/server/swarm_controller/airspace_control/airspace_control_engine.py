@@ -27,7 +27,7 @@ class AirspaceControlEngine:
     ):
         self.drone_region_map = {}  # drone_id -> region
         self.drone_priority_map = {}  # drone_id -> priority
-        self.region_map = {}  # region_id (geohash) -> region object
+        self.region_map : dict[str, asr.AirspaceRegion] = {} # region_id (geohash) -> region object
 
         # Geohash precision and altitude descretization (can be adjusted based on expected region sizes)
         self.geohash_precision = 10
@@ -121,10 +121,10 @@ class AirspaceControlEngine:
         self.boundary_corners = grid_corners
         final_regions = []
         lon_regions = []
-        alt_regions = self.split_by_altitude(base_region, alt_partitions)
+        alt_regions = self.split_by_altitude(base_region, alt_partitions, is_set_up=True)
 
         for alt_idx, alt_region in enumerate(alt_regions):
-            lon_regions = self.split_by_longitude(alt_region, lon_partitions)
+            lon_regions = self.split_by_longitude(alt_region, lon_partitions, is_set_up=True)
             lon_level = []
 
             for lon_idx, lon_region in enumerate(lon_regions):
@@ -170,7 +170,7 @@ class AirspaceControlEngine:
 
         for i in range(num_segments):
             segment_min_lat = min_lat + i * step
-            segment_max_lat = max_lat + (i + 1) * step
+            segment_max_lat = min_lat + (i + 1) * step
 
             # Top left -> Bottom left -> Bottom right -> Top right, Upper to Lower
             new_corners = [
@@ -185,11 +185,14 @@ class AirspaceControlEngine:
 
             if is_set_up:
                 self.add_region_airspace_map(new_region)
+                
+        if not is_set_up:
+            self.establish_new_neighbors_lat_split(target_region, regions)
 
         return regions
 
     def split_by_longitude(
-        self, target_region: asr.AirspaceRegion, num_segments: int
+        self, target_region: asr.AirspaceRegion, num_segments: int, is_set_up:bool
     ) -> list[asr.AirspaceRegion]:
         if num_segments <= 1:
             return [target_region]
@@ -199,13 +202,13 @@ class AirspaceControlEngine:
         min_alt, max_alt = target_region.min_alt, target_region.max_alt
 
         step = (max_lon - min_lon) / num_segments
-        regions = []
+        regions: list[asr.AirspaceRegion] = []
 
         logger.debug(f"Splitting region by longitude into {num_segments} segments")
 
         for i in range(num_segments):
             segment_min_lon = min_lon + i * step
-            segment_max_lon = max_lon + (i + 1) * step
+            segment_max_lon = min_lon + (i + 1) * step
 
             # Top left -> Bottom left -> Bottom right -> Top right, Upper to Lower
             new_corners = [
@@ -217,11 +220,12 @@ class AirspaceControlEngine:
 
             new_region = asr.AirspaceRegion(min_alt, max_alt, new_corners)
             regions.append(new_region)
-
+        if not is_set_up:
+            self.establish_new_neighbors_lon_split(target_region, regions)
         return regions
 
     def split_by_altitude(
-        self, target_region: asr.AirspaceRegion, num_segments: int
+        self, target_region: asr.AirspaceRegion, num_segments: int, is_set_up:bool
     ) -> list[asr.AirspaceRegion]:
         if num_segments <= 1:
             return [target_region]
@@ -230,19 +234,21 @@ class AirspaceControlEngine:
         corners = target_region.corners
 
         step = (max_alt - min_alt) / num_segments
-        regions = []
+        regions: list[asr.AirspaceRegion] = []
 
         logger.debug(f"Splitting region by altitude into {num_segments} segments")
 
         for i in range(num_segments):
             segment_min_alt = min_alt + i * step
-            segment_max_alt = max_alt + (i + 1) * step
+            segment_max_alt = min_alt + (i + 1) * step
 
             new_region = asr.AirspaceRegion(segment_min_alt, segment_max_alt, corners)
             regions.append(new_region)
+        
+        if not is_set_up:
+            self.establish_new_neighbors_alt_split(target_region, regions)
         return regions
-
-    # establishing neighbor relationships
+    
     def establish_base_neighbors(
         self,
         regions: list[list[list[asr.AirspaceRegion]]],
@@ -282,7 +288,218 @@ class AirspaceControlEngine:
                     neighbor_count += region_neighbors
         logger.debug(f"Established {neighbor_count} neighbor relationships")
 
-    # need some methodology for further splitting regions and updating airspace map & neighbors
+    def establish_new_neighbors_alt_split(
+            self, 
+            target_region: asr.AirspaceRegion, 
+            sub_regions: list[asr.AirspaceRegion]):
+        
+        target_region_id = target_region.region_id
+        old_lat_neighbors = target_region.lateral_neighbors
+        old_upper_neighbors = target_region.upper_neighbors
+        old_lower_neighbors = target_region.lower_neighbors
+
+        for idx, new_region in enumerate(sub_regions):
+            new_region_id = self.add_region_airspace_map(new_region)
+            for lat_neighbor_id in old_lat_neighbors:
+                new_region.add_lateral_neighbor(lat_neighbor_id)
+                lat_neighbor = self.region_map[lat_neighbor_id]
+                if idx == 0:
+                    #only need to remove the original region from neighbors once 
+                    lat_neighbor.remove_lateral_neighbor(target_region.region_id)
+                lat_neighbor.add_lateral_neighbor(new_region_id)
+            if idx == 0 :
+                #bottom of the altsplit
+                for lower_neighbor_id in old_lower_neighbors:
+                    #cannot add this guy's upper neighbor yet (has not been assigned region's ID)
+                    new_region.add_lower_neighbor(lower_neighbor_id)
+                    lower_neighbor = self.region_map[lower_neighbor_id]
+                    lower_neighbor.remove_upper_neighbor(target_region_id)
+                    lower_neighbor.add_upper_neighbor(new_region_id)
+            elif idx == len(sub_regions) -1:
+                #top of the altsplit
+                for upper_neighbor_id in old_upper_neighbors:
+                    new_region.add_upper_neighbor(upper_neighbor_id)
+                    new_region.add_lower_neighbor(sub_regions[idx-1].region_id)
+                    upper_neighbor = self.region_map[upper_neighbor_id]
+                    upper_neighbor.remove_lower_neighbor(target_region_id)
+                    upper_neighbor.add_lower_neighbor(new_region_id)
+            else:
+                #middle of altsplit
+                lower_neighbor = sub_regions[idx-1]
+                lower_neighbor_id = lower_neighbor.region_id
+                new_region.add_lower_neighbor(lower_neighbor_id)
+                lower_neighbor.add_upper_neighbor(new_region_id)
+
+        del self.region_map[target_region_id]
+
+    def establish_new_neighbors_lon_split(
+            self, 
+            target_region: asr.AirspaceRegion, 
+            sub_regions: list[asr.AirspaceRegion]):
+        
+        target_region_id = target_region.region_id
+        old_lat_neighbors = self.get_directional_neighbors(target_region)
+        old_upper_neighbors = target_region.upper_neighbors
+        old_lower_neighbors = target_region.lower_neighbors
+
+        for idx, new_region in enumerate(sub_regions):
+            new_region_id = self.add_region_airspace_map(new_region)
+
+            #all inherit vertical neighbors
+            for upper_neighbor_id in old_upper_neighbors:
+                upper_neighbor = self.region_map[upper_neighbor_id]
+                if idx == 0:
+                    upper_neighbor.remove_lower_neighbor(target_region_id)
+                upper_neighbor.add_lower_neighbor(new_region_id)
+                new_region.add_upper_neighbor(upper_neighbor_id)
+            for lower_neighbor_id in old_lower_neighbors:
+                lower_neighbor = self.region_map[lower_neighbor_id]
+                if idx == 0:
+                    lower_neighbor.remove_upper_neighbor(target_region_id)
+                lower_neighbor.add_upper_neighbor(new_region_id)
+                new_region.add_lower_neighbor(lower_neighbor_id)
+            #all inherit north and south neighbors
+            for direction in ['n', 's']:
+                if old_lat_neighbors[direction] is not None:
+                    neighbor_id = old_lat_neighbors[direction]
+                    neighbor = self.region_map[neighbor_id]
+                    if idx == 0:
+                        neighbor.remove_lateral_neighbor(target_region_id)
+                    neighbor.add_lateral_neighbor(new_region_id)
+                    new_region.add_lateral_neighbor(neighbor_id)
+
+            if idx == 0:
+                #far west of lonsplit - needs to have south-west, west, north-west lat neighbors
+                for direction in ['w', 'sw', 'nw']:
+                    if old_lat_neighbors[direction] is not None:
+                        neighbor_id = old_lat_neighbors[direction]
+                        neighbor = self.region_map[neighbor_id]
+                        neighbor.remove_lateral_neighbor(target_region_id)
+                        neighbor.add_lateral_neighbor(new_region_id)
+                        new_region.add_lateral_neighbor(neighbor_id)
+
+            elif idx == len(sub_regions) - 1:
+                #far east of lonsplit - needs to have north-east, east, south-east lat neighbors & previous from regions
+                for direction in ['ne', 'se', 'e']:
+                    if old_lat_neighbors[direction] is not None:
+                        neighbor_id = old_lat_neighbors[direction]
+                        neighbor = self.region_map[neighbor_id]
+                        neighbor.remove_lateral_neighbor(target_region_id)
+                        neighbor.add_lateral_neighbor(new_region_id)
+                        new_region.add_lateral_neighbor(neighbor_id)
+                new_region.add_lateral_neighbor(sub_regions[idx-1].region_id)
+                sub_regions[idx-1].add_lateral_neighbor(new_region_id)
+            else: 
+                #add previous as lateral neighbor & vise versa 
+                sub_regions[idx-1].add_lateral_neighbor(new_region_id)
+                new_region.add_lateral_neighbor(sub_regions[idx-1].region_id)
+            
+        del self.region_map[target_region_id]
+    
+    def establish_new_neighbors_lat_split(
+            self,
+            target_region: asr.AirspaceRegion, 
+            sub_regions: list[asr.AirspaceRegion]):
+        
+        target_region_id = target_region.region_id
+        old_lat_neighbors = self.get_directional_neighbors(target_region)
+        old_upper_neighbors = target_region.upper_neighbors
+        old_lower_neighbors = target_region.lower_neighbors
+
+        for idx, new_region in enumerate(sub_regions):
+            new_region_id = self.add_region_airspace_map(new_region)
+
+            #all inherit vertical neighbors
+            for upper_neighbor_id in old_upper_neighbors:
+                upper_neighbor = self.region_map[upper_neighbor_id]
+                if idx == 0:
+                    upper_neighbor.remove_lower_neighbor(target_region_id)
+                upper_neighbor.add_lower_neighbor(new_region_id)
+                new_region.add_upper_neighbor(upper_neighbor_id)
+            for lower_neighbor_id in old_lower_neighbors:
+                lower_neighbor = self.region_map[lower_neighbor_id]
+                if idx == 0:
+                    lower_neighbor.remove_upper_neighbor(target_region_id)
+                lower_neighbor.add_upper_neighbor(new_region_id)
+                new_region.add_lower_neighbor(lower_neighbor_id)
+            #all inherit east and west neighbors
+            for direction in ['e', 'w']:
+                if old_lat_neighbors[direction] is not None:
+                   neighbor_id = old_lat_neighbors[direction]
+                   neighbor = self.region_map[neighbor_id]
+                   neighbor.add_lateral_neighbor(new_region_id)
+                   new_region.add_lateral_neighbor(neighbor_id)
+                   if idx == 0:
+                       neighbor.remove_lateral_neighbor(target_region_id)
+        
+            if idx == 0:
+                #far south of lonsplit - needs to have south, south-west, south-east lat neighbors
+                for direction in ['s', 'sw', 'se']:
+                    if old_lat_neighbors[direction] is not None:
+                        neighbor_id = old_lat_neighbors[direction]
+                        neighbor = self.region_map[neighbor_id]
+                        neighbor.remove_lateral_neighbor(target_region_id)
+                        neighbor.add_lateral_neighbor(new_region_id)
+                        new_region.add_lateral_neighbor(neighbor_id)
+
+            elif idx == len(sub_regions) - 1:
+                #far north of lonsplit - needs to have north, north-west, north-east lat neighbors & previous from regions
+                for direction in ['n', 'nw', 'ne']:
+                    if old_lat_neighbors[direction] is not None:
+                        neighbor_id = old_lat_neighbors[direction]
+                        neighbor = self.region_map[neighbor_id]
+                        neighbor.remove_lateral_neighbor(target_region_id)
+                        neighbor.add_lateral_neighbor(new_region_id)
+                        new_region.add_lateral_neighbor(neighbor_id)
+                new_region.add_lateral_neighbor(sub_regions[idx-1].region_id)
+                sub_regions[idx-1].add_lateral_neighbor(new_region_id)
+            else: 
+                #add previous as lateral neighbor & vise versa 
+                sub_regions[idx-1].add_lateral_neighbor(new_region_id)
+                new_region.add_lateral_neighbor(sub_regions[idx-1].region_id)
+            
+        del self.region_map[target_region_id]
+
+    def get_directional_neighbors(self, region: asr.AirspaceRegion) -> dict[str, str | None]:
+        neighbors = {
+            'n': None, 's': None, 'e': None, 'w': None,
+            'ne': None, 'nw': None, 'se': None, 'sw': None
+        }
+        
+        for neighbor_id in region.lateral_neighbors:
+            neighbor = self.region_map[neighbor_id]
+            
+            # Check latitude relationship
+            is_north = abs(neighbor.min_lat - region.max_lat) < 1e-9
+            is_south = abs(neighbor.max_lat - region.min_lat) < 1e-9
+            lat_aligned = abs(neighbor.min_lat - region.min_lat) < 1e-9 and \
+                        abs(neighbor.max_lat - region.max_lat) < 1e-9
+            
+            # Check longitude relationship
+            is_east = abs(neighbor.min_lon - region.max_lon) < 1e-9
+            is_west = abs(neighbor.max_lon - region.min_lon) < 1e-9
+            lon_aligned = abs(neighbor.min_lon - region.min_lon) < 1e-9 and \
+                        abs(neighbor.max_lon - region.max_lon) < 1e-9
+            
+            # Categorize
+            if is_north and lon_aligned:
+                neighbors['n'] = neighbor_id
+            elif is_south and lon_aligned:
+                neighbors['s'] = neighbor_id
+            elif is_east and lat_aligned:
+                neighbors['e'] = neighbor_id
+            elif is_west and lat_aligned:
+                neighbors['w'] = neighbor_id
+            elif is_north and is_east:
+                neighbors['ne'] = neighbor_id
+            elif is_north and is_west:
+                neighbors['nw'] = neighbor_id
+            elif is_south and is_east:
+                neighbors['se'] = neighbor_id
+            elif is_south and is_west:
+                neighbors['sw'] = neighbor_id
+        
+        return neighbors       
 
     def reserve_region(self, drone_id, target_region: asr.AirspaceRegion) -> bool:
         region_adapter = AirspaceLoggerAdapter(
@@ -356,18 +573,48 @@ class AirspaceControlEngine:
 
     def query_lateral_neighbors(
         self, ref_region: asr.AirspaceRegion
-    ) -> list[tuple[bool, int]]:
-        return list()
+    ) -> list[tuple[bool, int | None]]:
+        neighbor_info = list()
+        for neighbor_id in ref_region.lateral_neighbors:
+            neighbor_region = self.region_map[neighbor_id]
+            neighbor_status = neighbor_region.get_status()
+            if neighbor_status in [asr.RegionStatus.OCCUPIED, asr.RegionStatus.RESTRICTED_OCCUPIED]:
+                neighbor_occupant = neighbor_region.get_owner()
+            else: 
+                neighbor_occupant = None
+            neighbor_info.append((neighbor_status, neighbor_occupant))
+
+        return neighbor_info
 
     def query_upper_neighbors(
         self, ref_region: asr.AirspaceRegion
     ) -> list[tuple[bool, int]]:
-        return list()
+        neighbor_info = list()
+        for neighbor_id in ref_region.upper_neighbors:
+            neighbor_region = self.region_map[neighbor_id]
+            neighbor_status = neighbor_region.get_status()
+            if neighbor_status in [asr.RegionStatus.OCCUPIED, asr.RegionStatus.RESTRICTED_OCCUPIED]:
+                neighbor_occupant = neighbor_region.get_owner()
+            else: 
+                neighbor_occupant = None
+            neighbor_info.append((neighbor_status, neighbor_occupant))
+
+        return neighbor_info
 
     def query_lower_neighbors(
         self, ref_region: asr.AirspaceRegion
     ) -> list[tuple[bool, int]]:
-        return list()
+        neighbor_info = list()
+        for neighbor_id in ref_region.lower_neighbors:
+            neighbor_region = self.region_map[neighbor_id]
+            neighbor_status = neighbor_region.get_status()
+            if neighbor_status in [asr.RegionStatus.OCCUPIED, asr.RegionStatus.RESTRICTED_OCCUPIED]:
+                neighbor_occupant = neighbor_region.get_owner()
+            else: 
+                neighbor_occupant = None
+            neighbor_info.append((neighbor_status, neighbor_occupant))
+
+        return neighbor_info
 
     def set_priority(self, drone_id: int, new_priority: int):
         old_priority = self.drone_priority_map.get(drone_id)
@@ -443,7 +690,7 @@ class AirspaceControlEngine:
             target_region.update_status(asr.RegionStatus.FREE)
             target_region.clear_timeout()
             return True
-        if region_owner is asr.RegionStatus.RESTRICTED_OCCUPIED:
+        if region_status is asr.RegionStatus.RESTRICTED_OCCUPIED:
             region_adapter.info(f"Exited restricted region")
             target_region.update_owner(None, None)
             target_region.update_status(asr.RegionStatus.RESTRICTED_AVAILABLE)
