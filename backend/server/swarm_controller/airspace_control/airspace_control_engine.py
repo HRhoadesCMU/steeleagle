@@ -25,6 +25,7 @@ class AirspaceControlEngine:
         min_alt,
         max_alt,
     ):
+        self.next_common_id = 0
         self.drone_region_map = {}  # drone_id -> region
         self.drone_priority_map = {}  # drone_id -> priority
         self.region_map : dict[str, asr.AirspaceRegion] = {} # region_id (geohash) -> region object
@@ -77,9 +78,14 @@ class AirspaceControlEngine:
         self.region_map[geohash_id] = region
 
         logger.debug(
-            f"Added region {geohash_id} to airspace map at centroid ({lat:.4f}, {lon:.4f}, {alt:.0f})"
+            f"c_id: {region.c_id} >> Added region {geohash_id} to airspace map at centroid ({lat:.4f}, {lon:.4f}, {alt:.0f})"
         )
         return geohash_id
+
+    def get_next_cid(self):
+        next_id = self.next_common_id
+        self.next_common_id += 1
+        return next_id
 
     def get_region_from_point(
         self, lat: float, lon: float, alt: float
@@ -93,6 +99,9 @@ class AirspaceControlEngine:
         if geohash_key in self.region_map:
             region = self.region_map[geohash_key]
             if region.contains(lat, lon, alt):
+                logger.debug(
+                    f"c_id: {region.c_id} >> Region contains point ({lat:.4f}, {lon:.4f}, {alt:.0f})"
+                )
                 return region
 
     def get_region_from_id(self, region_id: str) -> Optional[asr.AirspaceRegion]:
@@ -117,7 +126,7 @@ class AirspaceControlEngine:
             f"altitude {min_alt}-{max_alt}m, corners: {grid_corners}"
         )
 
-        base_region = asr.AirspaceRegion(min_alt, max_alt, grid_corners)
+        base_region = asr.AirspaceRegion(min_alt, max_alt, grid_corners, self.get_next_cid())
         self.boundary_corners = grid_corners
         final_regions = []
         lon_regions = []
@@ -166,7 +175,7 @@ class AirspaceControlEngine:
         step = (max_lat - min_lat) / num_segments
         regions = []
 
-        logger.debug(f"Splitting region by latitude into {num_segments} segments")
+        logger.debug(f"c_id: {target_region.c_id} >> Splitting by latitude into {num_segments} segments")
 
         for i in range(num_segments):
             segment_min_lat = min_lat + i * step
@@ -180,7 +189,7 @@ class AirspaceControlEngine:
                 (segment_max_lat, max_lon),
             ]
 
-            new_region = asr.AirspaceRegion(min_alt, max_alt, new_corners)
+            new_region = asr.AirspaceRegion(min_alt, max_alt, new_corners, self.get_next_cid())
             regions.append(new_region)
 
             if is_set_up:
@@ -204,7 +213,7 @@ class AirspaceControlEngine:
         step = (max_lon - min_lon) / num_segments
         regions: list[asr.AirspaceRegion] = []
 
-        logger.debug(f"Splitting region by longitude into {num_segments} segments")
+        logger.debug(f"c_id: {target_region.c_id} >> Splitting by longitude into {num_segments} segments")
 
         for i in range(num_segments):
             segment_min_lon = min_lon + i * step
@@ -218,7 +227,7 @@ class AirspaceControlEngine:
                 (max_lat, segment_max_lon),
             ]
 
-            new_region = asr.AirspaceRegion(min_alt, max_alt, new_corners)
+            new_region = asr.AirspaceRegion(min_alt, max_alt, new_corners, self.get_next_cid())
             regions.append(new_region)
         if not is_set_up:
             self.establish_new_neighbors_lon_split(target_region, regions)
@@ -236,13 +245,13 @@ class AirspaceControlEngine:
         step = (max_alt - min_alt) / num_segments
         regions: list[asr.AirspaceRegion] = []
 
-        logger.debug(f"Splitting region by altitude into {num_segments} segments")
+        logger.debug(f"c_id: {target_region.c_id} >> Splitting by altitude into {num_segments} segments")
 
         for i in range(num_segments):
             segment_min_alt = min_alt + i * step
             segment_max_alt = min_alt + (i + 1) * step
 
-            new_region = asr.AirspaceRegion(segment_min_alt, segment_max_alt, corners)
+            new_region = asr.AirspaceRegion(segment_min_alt, segment_max_alt, corners, self.get_next_cid())
             regions.append(new_region)
         
         if not is_set_up:
@@ -515,15 +524,15 @@ class AirspaceControlEngine:
                 return True
             # Fail if owned by another drone
             actions_logger.warning(
-                f"RESERVATION CONFLICT: Drone {drone_id} attempted to reserve region {target_region.region_id} owned by drone {curr_owner}"
+                f"c_id: {target_region.c_id} >> RESERVATION CONFLICT: Drone {drone_id} attempted to reserve region {target_region.region_id} owned by drone {curr_owner}"
             )
             region_adapter.warning(
-                f"Reservation denied - region owned by drone {curr_owner}"
+                f"c_id: {target_region.c_id} >> RESERVATION DENIED: Region owned by drone {curr_owner}"
             )
             return False
 
         region_adapter.info(
-            f"Region reserved successfully (priority: {self.drone_priority_map.get(drone_id, 'unknown')})"
+            f"c_id: {target_region.c_id} >> Region reserved successfully (priority: {self.drone_priority_map.get(drone_id, 'unknown')})"
         )
         target_region.update_status(asr.RegionStatus.ALLOCATED)
         target_region.update_owner(drone_id, self.drone_priority_map[drone_id])
@@ -539,7 +548,7 @@ class AirspaceControlEngine:
             or region_stat is asr.RegionStatus.FREE
         ):
             region_adapter.warning(
-                f"Renewal denied - region status: {region_stat.name}"
+                f"c_id: {target_region.c_id} >> RENEWAL DENIED - region status: {region_stat.name}"
             )
             return False
         curr_owner = target_region.get_owner()
@@ -549,17 +558,17 @@ class AirspaceControlEngine:
             return True
 
         actions_logger.warning(
-            f"UNAUTHORIZED RENEWAL: Drone {drone_id} attempted to renew region {target_region.region_id} owned by drone {curr_owner}"
+            f"c_id: {target_region.c_id} >> UNAUTHORIZED RENEWAL: Drone {drone_id} attempted to renew region {target_region.region_id} owned by drone {curr_owner}"
         )
         return False
 
     # needs to be async
     def revoke_region(self, target_region: asr.AirspaceRegion) -> bool:
         logger.warning(
-            f"Region {target_region.region_id} revocation requested (owner: {target_region.get_owner()})"
+            f"c_id: {target_region.c_id} >> Region {target_region.region_id} revocation requested (owner: {target_region.get_owner()})"
         )
         actions_logger.warning(
-            f"REGION REVOCATION: {target_region.region_id} revoked from drone {target_region.get_owner()}"
+            f"c_id: {target_region.c_id} >> REGION REVOCATION: {target_region.region_id} revoked from drone {target_region.get_owner()}"
         )
         return True
 
@@ -625,19 +634,19 @@ class AirspaceControlEngine:
 
     # needs to be async for if drone is currently in region/ region is reserved
     def mark_no_fly(self, target_region: asr.AirspaceRegion) -> bool:
-        logger.critical(f"NO-FLY ZONE established for region {target_region.region_id}")
+        logger.critical(f"c_id: {target_region.c_id} >> NO-FLY ZONE established for region {target_region.region_id}")
         actions_logger.critical(
-            f"NO-FLY ZONE: Region {target_region.region_id} marked as no-fly (previous owner: {target_region.get_owner()})"
+            f"c_id: {target_region.c_id} >> NO-FLY ZONE: Region {target_region.region_id} marked as no-fly (previous owner: {target_region.get_owner()})"
         )
         return True
 
     # needs to be async for if drone is currently in region/ region is reserved
     def mark_restricted_fly(self, target_region: asr.AirspaceRegion) -> bool:
         logger.warning(
-            f"RESTRICTED ZONE established for region {target_region.region_id}"
+            f"c_id: {target_region.c_id} >> RESTRICTED ZONE established for region {target_region.region_id}"
         )
         actions_logger.warning(
-            f"RESTRICTED ZONE: Region {target_region.region_id} marked as restricted"
+            f"c_id: {target_region.c_id} >> RESTRICTED ZONE: Region {target_region.region_id} marked as restricted"
         )
         return True
 
@@ -650,10 +659,10 @@ class AirspaceControlEngine:
         region_owner = target_region.get_owner()
         if region_owner != drone_id:
             actions_logger.error(
-                f"UNAUTHORIZED OCCUPANCY: Drone {drone_id} attempted to occupy region {target_region.region_id} owned by drone {region_owner}"
+                f"c_id: {target_region.c_id} >> UNAUTHORIZED OCCUPANCY: Drone {drone_id} attempted to occupy region {target_region.region_id} owned by drone {region_owner}"
             )
             region_adapter.error(
-                f"Occupancy denied - not region owner (owner: {region_owner})"
+                f"c_id: {target_region.c_id} >> Occupancy denied - not region owner (owner: {region_owner})"
             )
             return False
         if region_status is asr.RegionStatus.RESTRICTED_ALLOCATED:
@@ -680,7 +689,7 @@ class AirspaceControlEngine:
         region_owner = target_region.get_owner()
         if region_owner != drone_id:
             actions_logger.error(
-                f"UNAUTHORIZED EXIT: Drone {drone_id} attempted to exit region {target_region.region_id} owned by drone {region_owner}"
+                f"c_id: {target_region.c_id} >> UNAUTHORIZED EXIT: Drone {drone_id} attempted to exit region {target_region.region_id} owned by drone {region_owner}"
             )
             region_adapter.error(f"Exit denied - not region owner")
             return False

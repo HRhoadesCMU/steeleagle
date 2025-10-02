@@ -19,8 +19,9 @@ class RegionStatus(Enum):
 
 class AirspaceRegion:
     def __init__(
-        self, min_alt: float, max_alt: float, corners: list[tuple[float, float]]
+        self, min_alt: float, max_alt: float, corners: list[tuple[float, float]], c_id: int
     ):
+        self.c_id = c_id
         self.min_alt = min_alt
         self.max_alt = max_alt
         self.region_id: str | None = None  # Will be set to geohash by the engine
@@ -52,7 +53,7 @@ class AirspaceRegion:
         self.lower_neighbors: set[str] = set()  # Lower altitude neighbors (9)
 
         logger.debug(
-            f"AirspaceRegion created: lat={self.min_lat:.4f}-{self.max_lat:.4f}, "
+            f"c_id: {self.c_id} >> AirspaceRegion created: lat={self.min_lat:.4f}-{self.max_lat:.4f}, "
             f"lon={self.min_lon:.4f}-{self.max_lon:.4f}, alt={self.min_alt:.0f}-{self.max_alt:.0f}"
         )
 
@@ -60,7 +61,8 @@ class AirspaceRegion:
         CORNER_COUNT = 4
         if ref_alt < self.min_alt or ref_alt > self.max_alt:
             logger.debug(
-                f"Point ({ref_lat:.4f}, {ref_lon:.4f}, {ref_alt:.0f}) outside altitude bounds of region {self.region_id}"
+                f"c_id: {self.c_id} >> Point ({ref_lat:.4f}, {ref_lon:.4f}, {ref_alt:.0f})"
+                f" outside altitude bounds of region {self.region_id}"
             )
             return False
         # line-side test lateral point against corners
@@ -69,11 +71,13 @@ class AirspaceRegion:
                 self.corners[i], self.corners[i + 1 % CORNER_COUNT], (ref_lat, ref_lon)
             ):
                 logger.debug(
-                    f"Point ({ref_lat:.4f}, {ref_lon:.4f}, {ref_alt:.0f}) outside lateral bounds of region {self.region_id}"
+                    f"c_id: {self.c_id} >> Point ({ref_lat:.4f}, {ref_lon:.4f}, {ref_alt:.0f})"
+                    " outside lateral bounds of region {self.region_id}"
                 )
                 return False
         logger.debug(
-            f"Point ({ref_lat:.4f}, {ref_lon:.4f}, {ref_alt:.0f}) contained in region {self.region_id}"
+            f"c_id: {self.c_id} >> Point ({ref_lat:.4f}, {ref_lon:.4f}, {ref_alt:.0f})"
+            f" contained in region {self.region_id}"
         )
         return True
 
@@ -97,42 +101,42 @@ class AirspaceRegion:
         if neighbor_id not in self.lateral_neighbors:
             self.lateral_neighbors.add(neighbor_id)
             logger.debug(
-                f"Added lateral neighbor {neighbor_id} to region {self.region_id}"
+                f"c_id: {self.c_id} >> Added lateral neighbor {neighbor_id} to region {self.region_id}"
             )
 
     def add_upper_neighbor(self, neighbor_id: str):
         if neighbor_id not in self.upper_neighbors:
             self.upper_neighbors.add(neighbor_id)
             logger.debug(
-                f"Added upper neighbor {neighbor_id} to region {self.region_id}"
+                f"c_id: {self.c_id} >> Added upper neighbor {neighbor_id} to region {self.region_id}"
             )
 
     def add_lower_neighbor(self, neighbor_id: str):
         if neighbor_id not in self.lower_neighbors:
             self.lower_neighbors.add(neighbor_id)
             logger.debug(
-                f"Added lower neighbor {neighbor_id} to region {self.region_id}"
+                f"c_id: {self.c_id} >> Added lower neighbor {neighbor_id} to region {self.region_id}"
             )
 
     def remove_lateral_neighbor(self, neighbor_id: str):
         if neighbor_id in self.lateral_neighbors:
             self.lateral_neighbors.discard(neighbor_id)
             logger.debug(
-                f"Removed lateral neighbor {neighbor_id} from region {self.region_id}"
+                f"c_id: {self.c_id} >> Removed lateral neighbor {neighbor_id} from region {self.region_id}"
             )
 
     def remove_upper_neighbor(self, neighbor_id: str):
         if neighbor_id in self.upper_neighbors:
             self.upper_neighbors.discard(neighbor_id)
             logger.debug(
-                f"Removed upper neighbor {neighbor_id} from region {self.region_id}"
+                f"c_id: {self.c_id} >> Removed upper neighbor {neighbor_id} from region {self.region_id}"
             )
 
     def remove_lower_neighbor(self, neighbor_id: str):
         if neighbor_id in self.lower_neighbors:
             self.lower_neighbors.discard(neighbor_id)
             logger.debug(
-                f"Removed lower neighbor {neighbor_id} from region {self.region_id}"
+                f"c_id: {self.c_id} >> Removed lower neighbor {neighbor_id} from region {self.region_id}"
             )
 
     def get_all_neighbor(self) -> set[str]:
@@ -174,7 +178,7 @@ class AirspaceRegion:
         )
 
         if shares_side:
-            logger.debug(f"Region {self.region_id} shares side with {other.region_id}")
+            logger.debug(f"c_id: {self.c_id} >> Region {self.region_id} shares side with {other.region_id}")
 
         return shares_side
 
@@ -213,14 +217,14 @@ class AirspaceRegion:
         overlaps = lat_overlap and lon_overlap and alt_overlap
 
         if overlaps:
-            logger.warning(f"Region {self.region_id} overlaps with {other.region_id}")
+            logger.warning(f"c_id: {self.c_id} >> Region {self.region_id} overlaps with {other.region_id}")
 
         return overlaps
 
     def is_available(self) -> bool:
         available = self.status is RegionStatus.FREE
         logger.debug(
-            f"Region {self.region_id} availability check: {available} (status: {self.status.name})"
+            f"c_id: {self.c_id} >> Region {self.region_id} availability check: {available} (status: {self.status.name})"
         )
         return available
 
@@ -230,7 +234,7 @@ class AirspaceRegion:
             or self.status is RegionStatus.RESTRICTED_AVAILABLE
         ):
             logger.debug(
-                f"Region {self.region_id} available for priority {req_priority} (status: {self.status.name})"
+                f"c_id: {self.c_id} >> Region {self.region_id} available for priority {req_priority} (status: {self.status.name})"
             )
             return True
 
@@ -241,13 +245,13 @@ class AirspaceRegion:
             if self.owner_priority is not None:
                 can_override = req_priority > self.owner_priority
                 logger.debug(
-                    f"Region {self.region_id} priority check: req={req_priority} vs current={self.owner_priority}, can_override={can_override}"
+                    f"c_id: {self.c_id} >> Region {self.region_id} priority check: req={req_priority} vs current={self.owner_priority}, can_override={can_override}"
                 )
                 return can_override
             return True
 
         logger.debug(
-            f"Region {self.region_id} not available for priority {req_priority} (status: {self.status.name})"
+            f"c_id: {self.c_id} >> Region {self.region_id} not available for priority {req_priority} (status: {self.status.name})"
         )
         return False
 
@@ -264,7 +268,7 @@ class AirspaceRegion:
         if self.status != new_status:
             old_status = self.status.name
             logger.info(
-                f"Region {self.region_id} status changed: {old_status} -> {new_status.name}"
+                f"c_id: {self.c_id} >> Region {self.region_id} status changed: {old_status} -> {new_status.name}"
             )
 
             # Log critical status changes to security log
@@ -275,7 +279,7 @@ class AirspaceRegion:
                 RegionStatus.RESTRICTED_OCCUPIED,
             ]:
                 security_logger.warning(
-                    f"CRITICAL STATUS CHANGE: Region {self.region_id} -> {new_status.name}"
+                    f"c_id: {self.c_id} >> CRITICAL STATUS CHANGE: {self.c_id}; Region {self.region_id} -> {new_status.name}"
                 )
 
         self.status = new_status
@@ -284,17 +288,17 @@ class AirspaceRegion:
         if self.owner != new_owner:
             old_owner = self.owner
             logger.info(
-                f"Region {self.region_id} owner changed: {old_owner} -> {new_owner} (priority: {new_owner_priority})"
+                f"c_id: {self.c_id} >> Region {self.region_id} owner changed: {old_owner} -> {new_owner} (priority: {new_owner_priority})"
             )
 
             # Log ownership changes to security log
             if new_owner is not None:
                 security_logger.info(
-                    f"OWNERSHIP GRANTED: Region {self.region_id} assigned to drone {new_owner} (priority: {new_owner_priority})"
+                    f"c_id: {self.c_id} >> OWNERSHIP GRANTED: Region {self.region_id} assigned to drone {new_owner} (priority: {new_owner_priority})"
                 )
             else:
                 security_logger.info(
-                    f"OWNERSHIP RELEASED: Region {self.region_id} released from drone {old_owner}"
+                    f"c_id: {self.c_id} >> OWNERSHIP RELEASED: Region {self.region_id} released from drone {old_owner}"
                 )
 
         self.owner = new_owner
@@ -304,56 +308,56 @@ class AirspaceRegion:
         if self.owner_priority != new_priority:
             old_priority = self.owner_priority
             logger.info(
-                f"Region {self.region_id} priority updated: {old_priority} -> {new_priority}"
+                f"c_id: {self.c_id} >> Region {self.region_id} priority updated: {old_priority} -> {new_priority}"
             )
         self.owner_priority = new_priority
 
     def update_min_alt(self, new_min_alt: float):
         if self.min_alt != new_min_alt:
             logger.debug(
-                f"Region {self.region_id} min_alt updated: {self.min_alt} -> {new_min_alt}"
+                f"c_id: {self.c_id} >> Region {self.region_id} min_alt updated: {self.min_alt} -> {new_min_alt}"
             )
         self.min_alt = new_min_alt
 
     def update_max_alt(self, new_max_alt: float):
         if self.max_alt != new_max_alt:
             logger.debug(
-                f"Region {self.region_id} max_alt updated: {self.max_alt} -> {new_max_alt}"
+                f"c_id: {self.c_id} >> Region {self.region_id} max_alt updated: {self.max_alt} -> {new_max_alt}"
             )
         self.max_alt = new_max_alt
 
     def update_min_lat(self, new_min_lat: float):
         if self.min_lat != new_min_lat:
             logger.debug(
-                f"Region {self.region_id} min_lat updated: {self.min_lat} -> {new_min_lat}"
+                f"c_id: {self.c_id} >> Region {self.region_id} min_lat updated: {self.min_lat} -> {new_min_lat}"
             )
         self.min_lat = new_min_lat
 
     def update_max_lat(self, new_max_lat: float):
         if self.max_lat != new_max_lat:
             logger.debug(
-                f"Region {self.region_id} max_lat updated: {self.max_lat} -> {new_max_lat}"
+                f"c_id: {self.c_id} >> Region {self.region_id} max_lat updated: {self.max_lat} -> {new_max_lat}"
             )
         self.max_lat = new_max_lat
 
     def update_min_lon(self, new_min_lon: float):
         if self.min_lon != new_min_lon:
             logger.debug(
-                f"Region {self.region_id} min_lon updated: {self.min_lon} -> {new_min_lon}"
+                f"c_id: {self.c_id} >> Region {self.region_id} min_lon updated: {self.min_lon} -> {new_min_lon}"
             )
         self.min_lon = new_min_lon
 
     def update_max_lon(self, new_max_lon: float):
         if self.max_lon != new_max_lon:
             logger.debug(
-                f"Region {self.region_id} max_lon updated: {self.max_lon} -> {new_max_lon}"
+                f"c_id: {self.c_id} >> Region {self.region_id} max_lon updated: {self.max_lon} -> {new_max_lon}"
             )
         self.max_lon = new_max_lon
 
     def update_corners(self, new_corners: list[tuple[float, float]]):
         if self.corners != new_corners:
             logger.info(
-                f"Region {self.region_id} corners updated: {self.corners} -> {new_corners}"
+                f"c_id: {self.c_id} >> Region {self.region_id} corners updated: {self.corners} -> {new_corners}"
             )
             # Recalculate bounds when corners change
             self.min_lat = new_corners[0][0]
@@ -376,13 +380,13 @@ class AirspaceRegion:
         self.timeout_len = length
         self.timeout_ref = time.time()
         logger.debug(
-            f"Region {self.region_id} timeout set: {length}s for drone {self.owner}"
+            f"c_id: {self.c_id} >> Region {self.region_id} timeout set: {length}s for drone {self.owner}"
         )
 
     def clear_timeout(self):
         if self.timeout_len is not None:
             logger.debug(
-                f"Region {self.region_id} timeout cleared for drone {self.owner}"
+                f"c_id: {self.c_id} >> Region {self.region_id} timeout cleared for drone {self.owner}"
             )
         self.timeout_len = None
         self.timeout_ref = None
@@ -397,15 +401,15 @@ class AirspaceRegion:
         if expired:
             remaining_time = (self.timeout_len + self.timeout_ref) - current_time
             logger.warning(
-                f"Region {self.region_id} lease EXPIRED for drone {self.owner} (overdue by {-remaining_time:.1f}s)"
+                f"c_id: {self.c_id} >> Region {self.region_id} lease EXPIRED for drone {self.owner} (overdue by {-remaining_time:.1f}s)"
             )
             security_logger.warning(
-                f"LEASE EXPIRED: Region {self.region_id} lease expired for drone {self.owner}"
+                f"c_id: {self.c_id} >> LEASE EXPIRED: Region {self.region_id} lease expired for drone {self.owner}"
             )
         else:
             remaining_time = (self.timeout_len + self.timeout_ref) - current_time
             logger.debug(
-                f"Region {self.region_id} lease check: {remaining_time:.1f}s remaining for drone {self.owner}"
+                f"c_id: {self.c_id} >> Region {self.region_id} lease check: {remaining_time:.1f}s remaining for drone {self.owner}"
             )
 
         return expired
@@ -437,7 +441,7 @@ class AirspaceRegion:
     def __str__(self) -> str:
         """String representation of the region"""
         return (
-            f"AirspaceRegion(id:{self.region_id}, "
+            f"AirspaceRegion(id:{self.region_id}, c_id:{self.c_id}"
             f"lat:{self.min_lat:.4f}-{self.max_lat:.4f}, "
             f"lon:{self.min_lon:.4f}-{self.max_lon:.4f}, "
             f"alt:{self.min_alt:.0f}-{self.max_alt:.0f}, "
