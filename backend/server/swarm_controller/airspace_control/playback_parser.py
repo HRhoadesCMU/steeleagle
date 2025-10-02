@@ -1,6 +1,8 @@
+from airspace_region import RegionStatus
 import airspace_region
 from datetime import datetime, timezone
 from enum import Enum
+import json
 import re
 import sys
 
@@ -40,11 +42,34 @@ class RegionState():
     def set_end_t(self, end_t):
         self.end_t = end_t
 
+class RegionStateEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if (type(obj) == RegionState):
+            return {
+                "start_t": obj.start_t,
+                "end_t": obj.end_t,
+                "min_alt": obj.min_alt,
+                "max_alt": obj.max_alt,
+                "corners": obj.corners,
+                "status": obj.status,
+                "owner": obj.owner,
+                "occupant": obj.occupant
+            }
+        else:
+            return obj.name
+
 class AirspaceTransaction():
-    def __init__(self, target_cid, transaction_type, transaction_details):
+    def __init__(self, target_cid, transaction_type):
         self.cid = target_cid
         self.tx_type = transaction_type
-        self.tx_info = transaction_details
+
+class AirspaceTransactionEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if type(obj) == AirspaceTransaction:
+            return {
+                "cid": obj.cid,
+                "tx_type": obj.tx_type.name
+            }
 
 class PlaybackEngine():
     def __init__(self):
@@ -64,10 +89,7 @@ class PlaybackEngine():
                 self.raw_data.append(cleaned_line)
             print(f"Read {len(self.raw_data)} lines from log file into memory for parsing...")
 
-    def parse_log_file(self, filename):
-        pass
-
-    def extract_airspace_base_features(self):
+    def parse_log_file(self):
         i = 0
         data_len = len(self.raw_data)
         while i < data_len:
@@ -75,6 +97,8 @@ class PlaybackEngine():
             match = re.search(r'create_airspace', curr_line[METHOD_IDX])
             if match is not None:
                 self.extract_starttime(curr_line)
+                self.extract_endtime(self.raw_data[-1])
+                self.prepopulate_tx_list()
                 self.extract_grid_minmax_alt(curr_line)
                 self.extract_airspace_corners(curr_line)
                 break
@@ -82,13 +106,41 @@ class PlaybackEngine():
         while i < data_len:
             self.parse_line(self.raw_data[i])
             i += 1
+        self.export_regions_json()
+        self.export_transactions_json()
         
+    
+    def export_regions_json(self):
+        fname = "parsed_regions.json"
+        try:
+            with open(fname, 'w') as jf:
+                json.dump(self.regions, jf, indent=4, ensure_ascii=False, cls=RegionStateEncoder)
+            print(f"Exported regions structure to json file {fname}...")
+        except:
+            print(f"Error exporting regions structure to json file {fname}...")
 
-    def extract_transactions(self, filename):
-        pass
+    def export_transactions_json(self):
+        fname = "parsed_tx.json"
+        try:
+            indexed_tx = []
+            for index, value in enumerate(self.actions_by_tstep):
+                indexed_tx.append({"t_step": index, "transactions": value})
+            with open(fname, 'w') as jf:
+                json.dump(indexed_tx, jf, indent=4, ensure_ascii=False, cls=AirspaceTransactionEncoder)
+            print(f"Exported transactions record to json file {fname}...")
+        except:
+            print(f"Error exposting transactions record to json file {fname}...")
+
+    def prepopulate_tx_list(self):
+        slots = (self.end_time - self.start_time) / 1000
+        for i in range(int(slots + 1)):
+            self.actions_by_tstep.append([])
 
     def extract_starttime(self, line):
         self.start_time = convert_dtg_to_epoch(line[TIME_IDX])
+
+    def extract_endtime(self, line):
+        self.end_time = convert_dtg_to_epoch(line[TIME_IDX])
 
     def extract_epoch_time(self, line_seg):
         return convert_dtg_to_epoch(line_seg)
@@ -118,38 +170,29 @@ class PlaybackEngine():
             if find_segment(r'geohash precision', line[DATA_IDX]):
                 return
             self.extract_region_creation(t_stamp, line[DATA_IDX])
-            # add to list of regions w/ start time defined
-            # add to tx log
         elif find_segment(r'split_by', method):
-            # end current state of cid, cid is destroyed
             if find_segment(r'lat', method):
                 self.extract_region_split(t_stamp, line[DATA_IDX], TransactionType.SPLIT_LAT)
             elif find_segment(r'lon', method):
                 self.extract_region_split(t_stamp, line[DATA_IDX], TransactionType.SPLIT_LON)
             else:
                 self.extract_region_split(t_stamp, line[DATA_IDX], TransactionType.SPLIT_ALT)
-        elif find_segment(r'reserve', method):
-            # end current state of cid
-            # start new state of cid
-            # add to tx log
-            self.extract_region_reservation(t_stamp, line[DATA_IDX])
         elif find_segment(r'update', method):
-            # end current state of cid
-            # start new state of cid
-            # add to tx log
             if find_segment(r'owner', method):
                 self.extract_owner_update(t_stamp, line[DATA_IDX])
             elif find_segment(r'status', method):
                 self.extract_status_update(t_stamp, line[DATA_IDX])
-        elif find_segment(r'add_occupant', method):
-            # end current state of cid
-            # start new state of cid
-            # add to tx log
-            self.extract_add_occupant(t_stamp, line[DATA_IDX])
+        elif find_segment(r'occupant', method):
+            if find_segment(r'UNAUTH', line[DATA_IDX]):
+                return
+            elif find_segment(r'add', method):
+                self.extract_occupant_update(t_stamp, line[DATA_IDX], True)
+            else:
+                self.extract_occupant_update(t_stamp, line[DATA_IDX], False)
 
     def produce_relative_timestamp(self, time_seg):
         e_time = self.extract_epoch_time(time_seg)
-        return (e_time - self.start_time) / 1000
+        return int((e_time - self.start_time) / 1000)
     
     def extract_region_creation(self, rel_timestamp, data_seg):
         cid_split = data_seg.split(" >> ")
@@ -159,26 +202,81 @@ class PlaybackEngine():
         min_alt, max_alt = parse_minmax_alt(alt_seg)
         corners = parse_coordinate_sequence(corner_seg)
         r_state = RegionState(rel_timestamp, min_alt, max_alt, corners,
-                              airspace_region.RegionStatus.FREE, None, None)
+                              airspace_region.RegionStatus.FREE, -1, -1)
         self.regions[cid] = [r_state]
-        # Need to format a tx for this
-        self.actions_by_tstep[rel_timestamp].append()
+        self.actions_by_tstep[rel_timestamp].append(
+            AirspaceTransaction(cid, TransactionType.CREATE))
         
 
     def extract_region_split(self, rel_timestamp, data_seg, split_type):
-        pass
-
-    def extract_region_reservation(self, rel_timestamp, data_seg):
-        pass
+        cid_split = data_seg.split(" >> ")
+        cid = regex_format_int_unsigned(cid_split[0])
+        self.regions[cid][-1].set_end_t(rel_timestamp)
+        self.actions_by_tstep[rel_timestamp].append(
+            AirspaceTransaction(cid, split_type)
+        )
 
     def extract_owner_update(self, rel_timestamp, data_seg):
-        pass
+        split_line = data_seg.split(" >> ")
+        cid = regex_format_int_unsigned(split_line[0])
+        drone_seg = split_line[1].split("->")[1].split("(")[0]
+        drone_id = regex_format_int_unsigned(drone_seg)
+        self.regions[cid][-1].set_end_t(rel_timestamp)
+        prev_state = self.regions[cid][-1]
+        if drone_id >= 0:
+            self.regions[cid].append(RegionState(rel_timestamp, prev_state.min_alt,
+                prev_state.max_alt, prev_state.corners, prev_state.status, drone_id, prev_state.occupant))
+        else:
+            self.regions[cid].append(RegionState(rel_timestamp, prev_state.min_alt,
+                prev_state.max_alt, prev_state.corners, prev_state.status, -1, prev_state.occupant))
+        self.actions_by_tstep[rel_timestamp].append(AirspaceTransaction(cid, TransactionType.OWNER_CHANGE))
 
     def extract_status_update(self, rel_timestamp, data_seg):
-        pass
+        split_line = data_seg.split(" >> ")
+        cid = regex_format_int_unsigned(split_line[0])
+        status_seg = split_line[1].split("->")[1]
+        status = None
+        if find_segment('FREE', status_seg):
+            status = RegionStatus.FREE
+        elif find_segment('RESTRICTED', status_seg):
+            if find_segment('ALLOCATED', status_seg):
+                status = RegionStatus.RESTRICTED_ALLOCATED
+            elif find_segment('AVAILABLE', status_seg):
+                status = RegionStatus.RESTRICTED_AVAILABLE
+            else:
+                status = RegionStatus.RESTRICTED_OCCUPIED
+        elif find_segment('ALLOCATED', status_seg):
+            status = RegionStatus.ALLOCATED
+        elif find_segment('OCCUPIED', status_seg):
+            status = RegionStatus.OCCUPIED
+        else:
+            status = RegionStatus.NOFLY
+        
+        self.regions[cid][-1].set_end_t(rel_timestamp)
+        prev_state = self.regions[cid][-1]
+        self.regions[cid].append(RegionState(rel_timestamp, prev_state.min_alt,
+            prev_state.max_alt, prev_state.corners, status, prev_state.owner,
+            prev_state.occupant))
+        self.actions_by_tstep[rel_timestamp].append(AirspaceTransaction(cid, TransactionType.STATUS_CHANGE))
+        
+    def extract_occupant_update(self, rel_timestamp, data_seg, add_flag):
+        split_line = data_seg.split(" /\\ ")
+        drone_id = regex_format_int_unsigned(split_line[0])
+        cid_seg = split_line[1].split("]")[1]
+        cid = regex_format_int_unsigned(cid_seg)
 
-    def extract_add_occupant(self, rel_timestamp, data_seg):
-        pass
+        self.regions[cid][-1].set_end_t(rel_timestamp)
+        prev_state = self.regions[cid][-1]
+        if (add_flag):
+            self.regions[cid].append(RegionState(rel_timestamp, prev_state.min_alt,
+                prev_state.max_alt, prev_state.corners, prev_state.status, prev_state.owner,
+                drone_id))
+        else:
+            self.regions[cid].append(RegionState(rel_timestamp, prev_state.min_alt,
+            prev_state.max_alt, prev_state.corners, prev_state.status, prev_state.owner,
+            -1))
+        
+        self.actions_by_tstep[rel_timestamp].append(AirspaceTransaction(cid, TransactionType.OCCUPANT_CHANGE))
 
 
 def find_segment(keyword, line_items):
@@ -200,10 +298,16 @@ def regex_format_float_signed(target_string):
     return float(re.sub(r'[^0-9.-]', '', target_string))
 
 def regex_format_int_unsigned(target_string):
-    return int(re.sub(r'[^0-9]', '', target_string))
+    val = re.sub(r'[^0-9]', '', target_string)
+    if len(val) == 0:
+        return -1
+    return int(val)
 
 def regex_format_int_signed(target_string):
-    return int(re.sub(r'[^0-9-]', '', target_string))
+    val = re.sub(r'[^0-9-]', '', target_string)
+    if len(val) == 0:
+        return -1
+    return int(val)
 
 def parse_2d_coordinate(target_string):
     components = target_string.split(",")
@@ -247,4 +351,4 @@ def convert_epoch_to_dtg(epoch_value):
 if __name__ == "__main__":
     pe = PlaybackEngine()
     pe.read_file_to_mem('airspace_logs/airspace_control.log')
-    pe.extract_airspace_base_features()
+    pe.parse_log_file()

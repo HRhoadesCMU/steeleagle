@@ -103,6 +103,7 @@ class AirspaceControlEngine:
                     f"c_id: {region.c_id} >> Region contains point ({lat:.4f}, {lon:.4f}, {alt:.0f})"
                 )
                 return region
+        return None
 
     def get_region_from_id(self, region_id: str) -> Optional[asr.AirspaceRegion]:
         region = self.region_map[region_id]
@@ -519,7 +520,7 @@ class AirspaceControlEngine:
             # Renew the lease if already owned by the requesting drone
             curr_owner = target_region.get_owner()
             if curr_owner is not None and curr_owner == drone_id:
-                region_adapter.info(f"Renewed lease for existing reservation")
+                region_adapter.info(f"c_id: {target_region.c_id} >> Renewed lease for existing reservation")
                 target_region.set_timeout(BASE_TIMEOUT)
                 return True
             # Fail if owned by another drone
@@ -666,12 +667,12 @@ class AirspaceControlEngine:
             )
             return False
         if region_status is asr.RegionStatus.RESTRICTED_ALLOCATED:
-            region_adapter.info(f"Entered restricted region")
+            region_adapter.info(f"c_id: {target_region.c_id} >> Entered restricted region")
             target_region.update_status(asr.RegionStatus.RESTRICTED_OCCUPIED)
             self.renew_region(drone_id, target_region)
             return True
         if region_status is asr.RegionStatus.ALLOCATED:
-            region_adapter.info(f"Entered region")
+            region_adapter.info(f"c_id: {target_region.c_id} >> Entered region")
             target_region.update_status(asr.RegionStatus.OCCUPIED)
             self.renew_region(drone_id, target_region)
             return True
@@ -694,13 +695,13 @@ class AirspaceControlEngine:
             region_adapter.error(f"Exit denied - not region owner")
             return False
         if region_status is asr.RegionStatus.OCCUPIED:
-            region_adapter.info(f"Exited region")
+            region_adapter.info(f"c_id: {target_region.c_id} >> Exited region")
             target_region.update_owner(None, None)
             target_region.update_status(asr.RegionStatus.FREE)
             target_region.clear_timeout()
             return True
         if region_status is asr.RegionStatus.RESTRICTED_OCCUPIED:
-            region_adapter.info(f"Exited restricted region")
+            region_adapter.info(f"c_id: {target_region.c_id} >> Exited restricted region")
             target_region.update_owner(None, None)
             target_region.update_status(asr.RegionStatus.RESTRICTED_AVAILABLE)
             target_region.clear_timeout()
