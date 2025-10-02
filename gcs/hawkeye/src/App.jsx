@@ -1,8 +1,12 @@
 import { useState } from 'react'
+import { useReducer } from 'react'
 import { useRef, useEffect } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { fas } from '@fortawesome/free-solid-svg-icons'
 import { library } from '@fortawesome/fontawesome-svg-core'
+
+import ListGroup from 'react-bootstrap/ListGroup';
+import Badge from 'react-bootstrap/Badge'
 
 import Mapbox from './Mapbox.jsx'
 import Drawer from './Drawer.jsx'
@@ -10,6 +14,7 @@ import VehicleGroup from './VehicleGroup.jsx'
 
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './App.css'
+import ListGroupItem from 'react-bootstrap/esm/ListGroupItem.js'
 
 library.add(fas)
 
@@ -31,7 +36,7 @@ function generateVehicleData() {
   var vehicles = [];
   var number = getRandomInt(1,10);
   for (var i=0; i< number; i++) {
-    vehicles[i] = ({ name: getRandomName(), model: models[Math.floor(Math.random() * models.length)], battery: getRandomInt(0,100), sats: getRandomInt(0,25), task: Math.random() >0.5 ? "idle" : "tracking" , last_updated: getRandomInt(0,30)})
+    vehicles[i] = ({ name: getRandomName(), model: models[Math.floor(Math.random() * models.length)], battery: getRandomInt(0,100), sats: getRandomInt(0,25), task: Math.random() >0.5 ? "idle" : "tracking" , last_updated: getRandomInt(0,30), selected: false})
   }
   return vehicles;
 }
@@ -39,8 +44,7 @@ function generateVehicleData() {
 function App() {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [drawerWidth, setDrawerWidth] = useState(0);
-  const [selectedList, updateSelectedVehicles] = useState([])
-  const [vehicles] = useState(generateVehicleData());
+  const [vehicles, setVehicles] = useState(generateVehicleData());
   const handleDrawerToggle = () => {
     setIsDrawerOpen(!isDrawerOpen);
   };
@@ -49,9 +53,11 @@ function App() {
     setDrawerWidth(width);
   };
 
-    function selectVehicle(index) {
-    alert(selectedList);
-  }
+    const toggleSelected = (name) => {
+    setVehicles(vehicles.map(vehicle =>
+      vehicle.name === name ? { ...vehicle, selected: !vehicle.selected } : vehicle
+    ));
+  };
 
 
 
@@ -63,6 +69,9 @@ function App() {
             <FontAwesomeIcon icon={`fas-solid ${isDrawerOpen ? "fa-eye-slash" : "fa-eye"}`} />
           </button>
           <span className="nav-title">Hawkeye</span>
+          {vehicles.filter(item => item.selected).map(item => (
+            <Badge pill bg="light" text="dark" key={item.name}>{item.name}</Badge>
+          ))}
         </div>
       </nav>
 
@@ -89,7 +98,7 @@ function App() {
             transition: 'margin-left 0.1s ease'
           }}
       >
-      <VehicleGroup selectedList={selectedList} vehicles={vehicles} onClick={selectVehicle}/>
+      <VehicleGroup vehicles={vehicles} togglefunc={toggleSelected}/>
       </footer>
     </>
   )
