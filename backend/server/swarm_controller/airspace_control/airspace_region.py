@@ -53,8 +53,9 @@ class AirspaceRegion:
         self.lower_neighbors: set[str] = set()  # Lower altitude neighbors (9)
 
         logger.debug(
-            f"c_id: {self.c_id} >> AirspaceRegion created: lat={self.min_lat:.4f}-{self.max_lat:.4f}, "
-            f"lon={self.min_lon:.4f}-{self.max_lon:.4f}, alt={self.min_alt:.0f}-{self.max_alt:.0f}"
+            f"c_id: {self.c_id} >> AirspaceRegion created: lat={self.min_lat:.4f}, {self.max_lat:.4f}, "
+            f"lon={self.min_lon:.4f}, {self.max_lon:.4f}, alt={self.min_alt:.0f} <-> {self.max_alt:.0f}, "
+            f"corners: {self.corners}"
         )
 
     def contains(self, ref_lat: float, ref_lon: float, ref_alt: float) -> bool:

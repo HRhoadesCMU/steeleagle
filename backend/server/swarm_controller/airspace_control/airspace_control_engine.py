@@ -123,7 +123,7 @@ class AirspaceControlEngine:
     ):
         logger.info(
             f"Creating airspace: {alt_partitions}×{lat_partitions}×{lon_partitions} grid, "
-            f"altitude {min_alt}-{max_alt}m, corners: {grid_corners}"
+            f"altitude {min_alt}<->{max_alt}m, corners: {grid_corners}"
         )
 
         base_region = asr.AirspaceRegion(min_alt, max_alt, grid_corners, self.get_next_cid())
