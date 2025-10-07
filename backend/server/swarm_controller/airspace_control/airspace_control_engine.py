@@ -130,14 +130,23 @@ class AirspaceControlEngine:
                 )
                 return region
             
+        neighbor_keys = self._get_geohash_neighbors(geohash_key, search_radius=2)
         # If no exact match, search nearby geohashes
-        neighbor_keys = self._get_geohash_neighbors(geohash_key, search_radius=1)
-        
         for neighbor_key in neighbor_keys:
             if neighbor_key in self.region_map:
                 region = self.region_map[neighbor_key]
                 if region.contains(lat, lon, alt):
+                    logger.debug(
+                    f"c_id: {region.c_id} >> Region contains point ({lat:.4f}, {lon:.4f}, {alt:.0f})"
+                )
                     return region
+        
+        for region in self.region_map.values():
+            if region.contains(lat, lon, alt):
+                logger.debug(
+                    f"c_id: {region.c_id} >> Region contains point ({lat:.4f}, {lon:.4f}, {alt:.0f})"
+                )
+                return region
                 
         return None
 
@@ -203,6 +212,7 @@ class AirspaceControlEngine:
         self, target_region: asr.AirspaceRegion, num_segments: int, is_set_up: bool
     ) -> list[asr.AirspaceRegion]:
         if num_segments <= 1:
+            self.add_region_airspace_map(target_region)
             return [target_region]
 
         min_lat, max_lat = target_region.min_lat, target_region.max_lat
