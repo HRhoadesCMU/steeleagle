@@ -1,5 +1,5 @@
 import airspace_region as asr
-import pygeohash as pgh
+import geohash as pgh
 from typing import Optional
 import itertools
 import time
@@ -68,6 +68,32 @@ class AirspaceControlEngine:
             alt_discrete = 0
         return base_geohash, alt_discrete
 
+    def _get_geohash_neighbors(self, geohash_key: str, search_radius: int = 1) -> list[str]:
+        """Get neighboring geohashes including altitude variations"""
+        base_geohash, ref_alt = self.parse_geohash_key(geohash_key)
+        
+        neighbor_keys = set()
+        
+        # Get 2D geohash neighbors
+        current_geohashes = {base_geohash}
+        
+        # Expand outward by search_radius steps
+        for radius in range(search_radius):
+            next_geohashes = set()
+            for gh in current_geohashes:
+                neighbors_dict = pgh.neighbors(gh)
+                next_geohashes.update(neighbors_dict)
+            current_geohashes.update(next_geohashes)
+        
+        # Add altitude variations for each 2D neighbor
+        for gh in current_geohashes:
+            for alt_offset in range(-search_radius, search_radius + 1):
+                neighbor_alt = ref_alt + alt_offset
+                neighbor_key = f"{gh}_{neighbor_alt}"
+                neighbor_keys.add(neighbor_key)
+        
+        return list(neighbor_keys)
+    
     def add_region_airspace_map(self, region: asr.AirspaceRegion):
         centroid = region.get_centroid()
         lat, lon, alt = centroid
@@ -103,6 +129,16 @@ class AirspaceControlEngine:
                     f"c_id: {region.c_id} >> Region contains point ({lat:.4f}, {lon:.4f}, {alt:.0f})"
                 )
                 return region
+            
+        # If no exact match, search nearby geohashes
+        neighbor_keys = self._get_geohash_neighbors(geohash_key, search_radius=1)
+        
+        for neighbor_key in neighbor_keys:
+            if neighbor_key in self.region_map:
+                region = self.region_map[neighbor_key]
+                if region.contains(lat, lon, alt):
+                    return region
+                
         return None
 
     def get_region_from_id(self, region_id: str) -> Optional[asr.AirspaceRegion]:
@@ -133,7 +169,7 @@ class AirspaceControlEngine:
         lon_regions = []
         alt_regions = self.split_by_altitude(base_region, alt_partitions, is_set_up=True)
 
-        for alt_idx, alt_region in enumerate(alt_regions):
+        for _, alt_region in enumerate(alt_regions):
             lon_regions = self.split_by_longitude(alt_region, lon_partitions, is_set_up=True)
             lon_level = []
 
