@@ -2,6 +2,7 @@ import json
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
+import PIL
 
 from airspace_region import RegionStatus
 
@@ -109,8 +110,28 @@ class AirspaceVisualizer():
                 for i in range(start_t, end_t):
                     self.status_lookup_table[i][ikey] = status
 
-    def render(self):
-        pass
+    def init_render_objs(self):
+        self.fig = plt.figure()
+        self.ax = self.fig.add_subplot(projection='3d')
+        self.ax.set(xlabel='Lat', ylabel='Lon', zlabel='Alt')
+
+    def render(self, save_filename=None):
+        plt.show()
+        if save_filename is not None:
+            self.anim_plt.save(f'{save_filename}', writer='pillow')
+
+    def update_plot(self, frame_id, ax):
+        ax.clear()
+        ax.set(xlabel='Lat', ylabel='Lon', zlabel='Alt')
+        ax = self.load_voxels(ax)#ax.voxels() # need to pull voxel data, facecolors, edgecolors
+        ax.set_title(f'Timestep: {frame_id}')
+        return ax
+    
+    def load_voxels(self, ax):
+        # need to convert voxel_dims to meshgrid
+        # need to load colors by status
+        # need to make sure that ids are correctly assigned to indexes
+        return ax
 
 def build_grid():
     filled = np.zeros((3, 3, 3), dtype=int)
