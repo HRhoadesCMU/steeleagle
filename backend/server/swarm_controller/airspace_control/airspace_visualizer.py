@@ -1,6 +1,7 @@
 import json
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from matplotlib import animation
 import numpy as np
 import PIL
 
@@ -14,6 +15,8 @@ class AirspaceVisualizer():
         self.extract_active_regions()
         self.extract_voxel_dims_lists()
         self.extract_region_status_dicts()
+        self.init_render_objs()
+        self.calculate_voxels()
     
     def read_json_files(self, region_fname, tx_fname):
         with open(region_fname, 'r') as file:
@@ -116,100 +119,71 @@ class AirspaceVisualizer():
         self.ax.set(xlabel='Lat', ylabel='Lon', zlabel='Alt')
 
     def render(self, save_filename=None):
+        self.init_render_objs()
         plt.show()
         if save_filename is not None:
             self.anim_plt.save(f'{save_filename}', writer='pillow')
 
-    def update_plot(self, frame_id, ax):
-        ax.clear()
-        ax.set(xlabel='Lat', ylabel='Lon', zlabel='Alt')
-        ax = self.load_voxels(ax)#ax.voxels() # need to pull voxel data, facecolors, edgecolors
-        ax.set_title(f'Timestep: {frame_id}')
-        return ax
+    def render_timestep(self, timestep, save_filename=None):
+        self.update_plot(timestep)
+        if save_filename is not None:
+            plt.savefig(save_filename)
+
+    def render_animated(self):
+        self.init_render_objs()
+        self.anim_plt = animation.FuncAnimation(self.fig, self.update_plot, frames=self.last_t+1, interval=250, blit=False)
+        plt.show()
+
+    def update_plot(self, frame_id):
+        self.ax.clear()
+        self.ax.set(xlabel='Lat', ylabel='Lon', zlabel='Alt')
+        self.load_voxels_timestep(frame_id)
+        self.ax.set_title(f'Timestep: {frame_id}')
     
-    def load_voxels(self, ax):
-        # need to convert voxel_dims to meshgrid
-        # need to load colors by status
-        # need to make sure that ids are correctly assigned to indexes
-        return ax
+    def calculate_voxels(self):
+        self.voxel_components = [[] for i in range(self.last_t + 1)]
+        for i in range(self.last_t + 1):
+            self.calculate_voxels_timestep(i)
 
-def build_grid():
-    filled = np.zeros((3, 3, 3), dtype=int)
-    for i in range(3):
-        for j in range(3):
-            for k in range(3):
-                if i == j and i == k and j == k:
-                    filled[i, j, k] = 1
-                else:
-                    filled[i, j, k] = 2
-    return filled
+    def calculate_voxels_timestep(self, timestep):
+        x, y, z = self.voxel_dims_by_tstep[timestep]
+        xv, yv, zv = np.meshgrid(x, y, z)
+        filled = np.ones((len(x) - 1, len(y) - 1, len(z) - 1), dtype=int)
+        colors = np.zeros(filled.shape + (4,))
+        x_len = len(x) - 1
+        y_len = len(y) - 1
+        z_len = len(z) - 1
+        
+        for i in range(x_len):
+            for j in range(y_len):
+                for k in range(z_len):
+                    vol_id = self.match_volume_to_id(timestep, x[i], x[i+1], y[j], y[j+1], z[k], z[k+1])
+                    vol_status = self.status_lookup_table[timestep][vol_id]
+                    if 'FREE' in vol_status:
+                        color_val = [0, 0, 0, 0]
+                    elif 'ALLOCATED' in vol_status:
+                        color_val = [1, 0, 0, 1]
+                    elif 'OCCUPIED' in vol_status:
+                        color_val = [0, 1, 0, 1]
+                    else:
+                        color_val = [1, 1, 1, 1]
+                    colors[i][j][k] = color_val
+        self.voxel_components[timestep] = (xv, yv, zv, filled, colors)
 
+    def match_volume_to_id(self, t, lat0, lat1, lon0, lon1, alt0, alt1):
+        search_space = self.active_regions_by_tstep[t]
+        c1 = (lat0, lon0, alt0)
+        c2 = (lat1, lon1, alt1)
+        for id in search_space:
+            cand_vol = self.region_volumes[id]
+            if c1 in cand_vol and c2 in cand_vol:
+                return id
 
-def get_cross_alt(grid, alt):
-    cross_section_voxels = np.zeros_like(grid[:, :, alt], dtype=int)
-    cross_section_voxels[:, :] = grid[:, :, alt]
-    print(cross_section_voxels.shape)
-    return cross_section_voxels.reshape((3, 3, 1))
-
-
-def get_cross_lon(grid, lon):
-    cross_section_voxels = np.zeros_like(grid[:, lon, :], dtype=int)
-    cross_section_voxels[:, :] = grid[:, lon, :]
-    print(cross_section_voxels.shape)
-    return cross_section_voxels.reshape((3, 1, 3))
-
-
-def get_cross_lat(grid, lat):
-    cross_section_voxels = np.zeros_like(grid[lat, :, :], dtype=int)
-    cross_section_voxels[:, :] = grid[lat, :, :]
-    print(cross_section_voxels.shape)
-    return cross_section_voxels.reshape((1, 3, 3))
-
-
-def get_coloring(grid):
-    print(grid)
-    colors = np.empty(grid.shape + (4,))
-    green_transparent = [0, 1, 0, 0.25]
-    red_transparent = [1, 0, 0, 0.25]
-    colors[grid == 1] = green_transparent
-    colors[grid == 2] = red_transparent
-    return colors
-
+    def load_voxels_timestep(self, timestep):
+        xv, yv, zv, filled, colors = self.voxel_components[timestep]
+        self.ax.voxels(xv, yv, zv, filled, facecolors=colors, edgecolors='k')
 
 if __name__ == "__main__":
-    """fig = plt.figure()
-    ax = fig.add_subplot(111, projection="3d")
-
-    SCALING_FACTOR = 0.15
-    c_lat = 1
-    c_lon = 2
-    c_alt = 1
-
-    # u, v = np.mgrid[0:2*np.pi:40j, 0:np.pi:20j]
-    # x = c_lat + (np.cos(u) * np.sin(v) * SCALING_FACTOR)
-    # y = c_lon + (np.sin(u) * np.sin(v) * SCALING_FACTOR)
-    # z = c_alt + (np.cos(v) * SCALING_FACTOR)
-
-    # 3. Plot the sphere
-    # Customize the appearance with `color`, `alpha` (transparency), and `rstride`/`cstride` for grid density
-    # ax.plot_surface(x, y, z, color='lightblue', alpha=0.6, rstride=1, cstride=1)
-
-    filled = build_grid()
-    coloring = get_coloring(filled)
-    # cross = get_cross_alt(filled, 1)
-    # cross = get_cross_lat(filled, 0)
-    cross = get_cross_lon(filled, 2)
-    cross_coloring = get_coloring(cross)
-    print(cross.shape)
-
-    # ax.voxels(filled, facecolors=coloring, edgecolor='k')
-
-    # plt.show()
-    # plt.pause(5)
-    # ax.clear()
-    # ax = fig.add_subplot(111, projection="3d")
-    ax.voxels(cross, facecolors=cross_coloring, edgecolor="k")
-    ax.set_box_aspect(cross.shape)
-
-    plt.show()"""
     av = AirspaceVisualizer("parsed_regions.json", "parsed_tx.json")
+    av.render_timestep(0)
+    av.render_animated()
